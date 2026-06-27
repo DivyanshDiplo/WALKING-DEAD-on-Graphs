@@ -21,14 +21,17 @@ std_rounds      : std-dev of capture rounds (None if fewer than 2 captures).
 
 from __future__ import annotations
 
+import logging
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import networkx as nx
 
 from .game import GameResult, play_game
 from .graph_builder import build_outerplanar
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,6 +44,8 @@ class SimulationResult:
     min_rounds: int | None
     max_rounds: int | None
     std_rounds: float | None
+    capture_rounds: list[int] = field(default_factory=list)  # raw per-trial data
+    graph: nx.Graph | None = field(default=None, repr=False)  # graph used for this run
 
     def summary(self) -> str:
         lines = [
@@ -89,18 +94,32 @@ def run(
     G: nx.Graph = build_outerplanar(n, seed=graph_seed)
     rng = random.Random(seed)
 
+    log.debug(
+        "simulation start: n=%d  k=%d  zombie_lazy=%s  survivor_lazy=%s  trials=%d",
+        n, k, zombie_lazy, survivor_lazy, trials,
+    )
+
     capture_rounds: list[int] = []
     survivor_wins = 0
 
-    for _ in range(trials):
+    for trial_idx in range(trials):
         result: GameResult = play_game(G, k, zombie_lazy, survivor_lazy, rng)
         if result.outcome == "capture":
             capture_rounds.append(result.rounds)
         else:
             survivor_wins += 1
+        log.debug(
+            "trial %d/%d: outcome=%s  rounds=%d",
+            trial_idx + 1, trials, result.outcome, result.rounds,
+        )
 
     captures = len(capture_rounds)
     capture_rate = captures / trials if trials > 0 else 0.0
+
+    log.debug(
+        "simulation done: captures=%d  survivor_wins=%d  capture_rate=%.1f%%",
+        captures, survivor_wins, capture_rate * 100,
+    )
 
     if captures == 0:
         return SimulationResult(
@@ -112,6 +131,8 @@ def run(
             min_rounds=None,
             max_rounds=None,
             std_rounds=None,
+            capture_rounds=[],
+            graph=G,
         )
 
     avg = sum(capture_rounds) / captures
@@ -131,4 +152,6 @@ def run(
         min_rounds=mn,
         max_rounds=mx,
         std_rounds=std,
+        capture_rounds=capture_rounds,
+        graph=G,
     )

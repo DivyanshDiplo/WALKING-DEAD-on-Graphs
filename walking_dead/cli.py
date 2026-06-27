@@ -13,9 +13,13 @@ Then runs all requested variation(s) and prints a formatted summary table.
 
 from __future__ import annotations
 
+import logging
 import sys
+from datetime import datetime
 
+from .logger import configure
 from .simulator import SimulationResult, run
+from .visualizer import save_graph, save_report
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +81,13 @@ def _print_result(label: str, result: SimulationResult) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    debug = "--debug" in sys.argv
+    configure(debug=debug)
+    if debug:
+        logging.getLogger("walking_dead").debug(
+            "debug logging enabled (walking_dead.*)"
+        )
+
     _header("Zombie Survivor -- Monte Carlo Simulator")
     print(
         "\n  Game: deterministic Zombies-and-Survivor on a random outerplanar graph."
@@ -125,6 +136,9 @@ def main() -> None:
     _header("Results")
     _print_result(label, result)
 
+    # Collect all results for the final report
+    session_results: list[tuple[str, SimulationResult]] = [(label, result)]
+
     # Offer to run another variation on the same configuration
     print()
     while _prompt_bool("\n  Run another variation with the same graph/trial settings?"):
@@ -145,6 +159,27 @@ def main() -> None:
             trials=trials,
         )
         _print_result(label, result)
+        session_results.append((label, result))
+
+    # Save matplotlib report + graph (shared timestamp so files pair up)
+    print()
+    print(_THIN)
+    print("  Generating report...")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = save_report(
+        run_config={"n": n, "k": k, "trials": trials},
+        results=session_results,
+        timestamp=ts,
+    )
+    first_graph = session_results[0][1].graph
+    graph_path = save_graph(
+        G=first_graph,
+        run_config={"n": n, "k": k, "trials": trials},
+        timestamp=ts,
+    )
+    print(f"  Report saved -> {report_path}")
+    print(f"  Graph saved  -> {graph_path}")
+    print(_THIN)
 
     print()
     print(_DIVIDER)

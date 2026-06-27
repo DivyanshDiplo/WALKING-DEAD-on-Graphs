@@ -16,8 +16,12 @@ lazy survivor  : may stay still OR move; chooses whichever maximises its
                  minimum distance to the nearest zombie.
 """
 
+import logging
 import random
+
 import networkx as nx
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +51,37 @@ def _min_dist_to_zombies(
 # Placement
 # ---------------------------------------------------------------------------
 
+def _outer_cycle_nodes(G: nx.Graph) -> list[int]:
+    """
+    Return the nodes of the outer Hamiltonian cycle of the outerplanar graph.
+
+    In our graph_builder construction the outer cycle is always the ring
+    0 - 1 - 2 - ... - (n-1) - 0, which spans every node.  We confirm this by
+    checking that all sequential ring edges (i, i+1 mod n) exist, then return
+    the ordered node list.
+
+    If for any reason the sequential ring is incomplete (custom graph), we fall
+    back to all nodes sorted by index so placement still works.
+    """
+    nodes = sorted(G.nodes())
+    n = len(nodes)
+    if n < 3:
+        return nodes
+
+    ring_intact = all(
+        G.has_edge(nodes[i], nodes[(i + 1) % n]) for i in range(n)
+    )
+    if ring_intact:
+        log.debug("_outer_cycle_nodes: ring 0-%d-0 confirmed (%d nodes)", n - 1, n)
+        return nodes
+
+    # Fallback: traverse starting from the lowest-index node, following ring edges
+    log.debug(
+        "_outer_cycle_nodes: sequential ring incomplete, falling back to all nodes"
+    )
+    return nodes
+
+
 def place_zombies(G: nx.Graph, k: int, rng: random.Random) -> list[int]:
     """
     Place k zombies at random distinct vertices.  This is the sole source of
@@ -54,25 +89,46 @@ def place_zombies(G: nx.Graph, k: int, rng: random.Random) -> list[int]:
     """
     if k > len(G):
         raise ValueError(f"Cannot place {k} zombies on a graph with {len(G)} nodes.")
-    return rng.sample(sorted(G.nodes()), k)
+    positions = rng.sample(sorted(G.nodes()), k)
+    log.debug("place_zombies: placed %d zombie(s) at %s", k, positions)
+    return positions
 
 
 def place_survivor(G: nx.Graph, zombie_positions: list[int]) -> int:
     """
-    Place the survivor at the vertex that maximises its minimum BFS distance to
-    any zombie.  Ties broken by lowest node index (deterministic).
+    Place the survivor on the outer Hamiltonian cycle at the vertex that
+    maximises its minimum BFS distance (in the full graph) to any zombie.
+    Ties broken by lowest node index (deterministic).
+
+    Only cycle vertices are considered as candidates so the survivor starts
+    on the outer ring, which is the natural habitat in the outerplanar game.
     """
+    cycle_nodes = _outer_cycle_nodes(G)
+    zombie_set = set(zombie_positions)
+
+    # Pre-compute full-graph BFS distances from every zombie once — O(k * n)
+    # rather than calling shortest_path_length for every (cycle_node, zombie) pair.
+    dist_from_zombie: dict[int, dict[int, int]] = {
+        z: nx.single_source_shortest_path_length(G, z) for z in zombie_positions
+    }
+
     best_node = -1
     best_dist = -1
-    for v in sorted(G.nodes()):
-        if v in zombie_positions:
+    for v in cycle_nodes:
+        if v in zombie_set:
             continue
-        min_d = min(
-            nx.shortest_path_length(G, v, z) for z in zombie_positions
+        min_d = min(dist_from_zombie[z][v] for z in zombie_positions)
+        log.debug(
+            "  place_survivor candidate: node %d  min_dist_to_zombie=%d", v, min_d
         )
         if min_d > best_dist:
             best_dist = min_d
             best_node = v
+
+    log.debug(
+        "place_survivor: placed survivor at cycle node %d (min_dist_to_zombie=%d)",
+        best_node, best_dist,
+    )
     return best_node
 
 
@@ -119,16 +175,29 @@ def zombie_step(
     if lazy:
         # Lazy: only move if there is a strictly closer neighbour
         if closer:
+            log.debug(
+                "zombie_step [lazy]: %d -> %d  (dist %d -> %d)",
+                pos, closer[0], current_dist, current_dist - 1,
+            )
             return closer[0]   # deterministic: lowest index
+        log.debug("zombie_step [lazy]: %d stays (no strictly closer neighbour)", pos)
         return pos             # stay still
     else:
         # Active: must move; pick closest neighbour; fall back to any neighbour
         if closer:
+            log.debug(
+                "zombie_step [active]: %d -> %d  (dist %d -> %d)",
+                pos, closer[0], current_dist, current_dist - 1,
+            )
             return closer[0]
         # Edge case: no neighbour is closer (should not happen on connected graphs
         # when current_dist > 0).  Move to the neighbour with the smallest dist.
         neighbours = sorted(G.neighbors(pos))
         neighbours.sort(key=lambda n: nx.shortest_path_length(G, n, survivor_pos))
+        log.debug(
+            "zombie_step [active, fallback]: %d -> %d  (no closer neighbour found)",
+            pos, neighbours[0],
+        )
         return neighbours[0]
 
 
@@ -187,6 +256,13 @@ def survivor_step(
     # staying still (only reachable if the graph is very small and heavily
     # populated with zombies).
     if best_node == -1:
+        log.debug("survivor_step: %d stays (surrounded by zombies)", pos)
         return pos
 
+    mode = "lazy" if lazy else "active"
+    action = "stays" if best_node == pos else f"-> {best_node}"
+    log.debug(
+        "survivor_step [%s]: %d %s  (safety %d)",
+        mode, pos, action, best_safety,
+    )
     return best_node

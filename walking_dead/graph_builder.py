@@ -15,8 +15,12 @@ interior chord edges at random after triangulation, producing sparser graphs
 while keeping the outer cycle intact so the graph stays connected.
 """
 
+import logging
 import random
+
 import networkx as nx
+
+log = logging.getLogger(__name__)
 
 
 def _triangulate(G: nx.Graph, cycle: list[int], rng: random.Random) -> None:
@@ -35,6 +39,7 @@ def _triangulate(G: nx.Graph, cycle: list[int], rng: random.Random) -> None:
     candidates = cycle[1:-1]
     k = rng.choice(candidates)
     k_idx = cycle.index(k)
+    log.debug("  triangulate: polygon=%s  split_vertex=%d", cycle, k)
 
     # Add the two chords from the outer endpoints to the split vertex
     if not G.has_edge(cycle[0], k):
@@ -51,7 +56,7 @@ def _triangulate(G: nx.Graph, cycle: list[int], rng: random.Random) -> None:
 
 def build_outerplanar(
     n: int,
-    chord_keep_prob: float = 1.0,
+    chord_keep_prob: float = 0.4,
     seed: int | None = None,
 ) -> nx.Graph:
     """
@@ -77,6 +82,11 @@ def build_outerplanar(
     if not (0.0 < chord_keep_prob <= 1.0):
         raise ValueError("chord_keep_prob must be in (0, 1]")
 
+    log.debug(
+        "build_outerplanar: n=%d  chord_keep_prob=%.2f  seed=%s",
+        n, chord_keep_prob, seed,
+    )
+
     rng = random.Random(seed)
     G = nx.Graph()
     G.add_nodes_from(range(n))
@@ -84,11 +94,13 @@ def build_outerplanar(
     # Outer Hamiltonian cycle — the backbone that guarantees connectivity
     for i in range(n):
         G.add_edge(i, (i + 1) % n)
+    log.debug("  outer cycle added: %d edges", n)
 
     if n >= 4:
         # Triangulate the interior
         cycle = list(range(n))
         _triangulate(G, cycle, rng)
+        log.debug("  triangulation complete: %d edges total", G.number_of_edges())
 
         # Optionally thin out interior chords (keep outer cycle intact)
         if chord_keep_prob < 1.0:
@@ -98,8 +110,18 @@ def build_outerplanar(
                 e for e in list(G.edges())
                 if e not in outer_edges and (e[1], e[0]) not in outer_edges
             ]
+            removed = 0
             for e in chord_edges:
                 if rng.random() > chord_keep_prob:
                     G.remove_edge(*e)
+                    removed += 1
+            log.debug(
+                "  chord thinning: removed %d / %d chords (keep_prob=%.2f)",
+                removed, len(chord_edges), chord_keep_prob,
+            )
 
+    log.debug(
+        "build_outerplanar done: %d nodes, %d edges",
+        G.number_of_nodes(), G.number_of_edges(),
+    )
     return G
