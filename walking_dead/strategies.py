@@ -202,8 +202,10 @@ def zombie_step(
 
     Lazy greedy  (lazy=True, assigned_vertex=None)
     -----------------------------------------------
-    Our default lazy mode.  Moves to the closest-to-survivor neighbour when
-    one exists; otherwise stays still.
+    Moves only when there is **exactly one** shortest-path neighbour toward
+    the survivor.  If the path branches (two or more neighbours are equally
+    optimal) the zombie cannot decide and stays still.  Also stays still when
+    no closer neighbour exists.
 
     Lazy strategic  (lazy=True, assigned_vertex=v)
     -----------------------------------------------
@@ -249,29 +251,44 @@ def zombie_step(
     # --- Lazy from here ---
 
     if assigned_vertex is None:
-        # Greedy lazy: move if closer to survivor
-        if closer_survivor:
+        # Lazy greedy: move only when there is a single unambiguous shortest path.
+        # If multiple neighbours are equally optimal the zombie stays still.
+        if len(closer_survivor) == 1:
             log.debug(
-                "zombie_step [lazy, greedy]: %d -> %d  (dist %d -> %d)",
+                "zombie_step [lazy, greedy]: %d -> %d  (dist %d -> %d, unique path)",
                 pos, closer_survivor[0], current_dist_survivor, current_dist_survivor - 1,
             )
             return closer_survivor[0]
-        log.debug("zombie_step [lazy, greedy]: %d stays (no closer neighbour)", pos)
+        if closer_survivor:
+            log.debug(
+                "zombie_step [lazy, greedy]: %d stays  (%d equally-close neighbours)",
+                pos, len(closer_survivor),
+            )
+        else:
+            log.debug("zombie_step [lazy, greedy]: %d stays (no closer neighbour)", pos)
         return pos
 
     # Strategic lazy: dual condition
-    # Fallback when already at assigned vertex or target == survivor
+    # Fallback when already at assigned vertex or target == survivor:
+    # reuse the same single-unambiguous-path rule as lazy greedy.
     if pos == assigned_vertex or assigned_vertex == survivor_pos:
-        if closer_survivor:
+        if len(closer_survivor) == 1:
             log.debug(
-                "zombie_step [lazy, strategic, at_target]: %d -> %d  (greedy fallback)",
+                "zombie_step [lazy, strategic, at_target]: %d -> %d  (unique-path greedy fallback)",
                 pos, closer_survivor[0],
             )
             return closer_survivor[0]
-        log.debug(
-            "zombie_step [lazy, strategic, at_target]: %d stays  (target=%d)",
-            pos, assigned_vertex,
-        )
+        if closer_survivor:
+            log.debug(
+                "zombie_step [lazy, strategic, at_target]: %d stays  "
+                "(%d equally-close neighbours, target=%d)",
+                pos, len(closer_survivor), assigned_vertex,
+            )
+        else:
+            log.debug(
+                "zombie_step [lazy, strategic, at_target]: %d stays  (target=%d)",
+                pos, assigned_vertex,
+            )
         return pos
 
     current_dist_target = nx.shortest_path_length(G, pos, assigned_vertex)
@@ -303,18 +320,22 @@ def move_zombies(
     G: nx.Graph,
     zombie_positions: list[int],
     survivor_pos: int,
-    lazy: bool,
-    assignments: list[int | None] | None = None,
+    modes: list[str],
+    assignments: list[int | None],
 ) -> list[int]:
     """Return new positions for all zombies after one turn.
 
-    assignments: per-zombie target vertex list (None entry = no assignment).
-                 Defaults to all-None when omitted (greedy or active mode).
+    modes       : per-zombie mode string — "active", "lazy_greedy", or
+                  "lazy_strategic".  Must have the same length as zombie_positions.
+    assignments : per-zombie strategic target vertex.  Only used when the
+                  corresponding mode is "lazy_strategic"; pass None for others.
     """
-    if assignments is None:
-        assignments = [None] * len(zombie_positions)
     return [
-        zombie_step(G, z, survivor_pos, lazy, assignments[i])
+        zombie_step(
+            G, z, survivor_pos,
+            lazy=(modes[i] != "active"),
+            assigned_vertex=(assignments[i] if modes[i] == "lazy_strategic" else None),
+        )
         for i, z in enumerate(zombie_positions)
     ]
 

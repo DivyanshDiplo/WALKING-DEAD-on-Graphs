@@ -59,24 +59,21 @@ def _build_dist_cache(
 def play_game(
     G: nx.Graph,
     k: int,
-    zombie_lazy: bool,
+    zombie_modes: list[str],
     survivor_lazy: bool,
     rng: random.Random,
-    zombie_strategic: bool = False,
 ) -> GameResult:
     """
     Run a single game on graph G.
 
     Parameters
     ----------
-    G                : the outerplanar graph (must be connected).
-    k                : number of zombies.
-    zombie_lazy      : True = lazy zombies (may wait); False = active (must move).
-    survivor_lazy    : True = lazy survivor (may stay); False = active (must move).
-    rng              : seeded RNG used only for zombie initial placement.
-    zombie_strategic : True = paper's assignment-based lazy strategy (only meaningful
-                       when zombie_lazy=True).  Each zombie is assigned a spread-out
-                       target vertex and uses the dual closest-to-both condition.
+    G             : the outerplanar graph (must be connected).
+    k             : number of zombies.
+    zombie_modes  : per-zombie mode list of length k.  Each entry is one of
+                    "active", "lazy_greedy", or "lazy_strategic".
+    survivor_lazy : True = lazy survivor (may stay); False = active (must move).
+    rng           : seeded RNG used only for zombie initial placement.
 
     Returns
     -------
@@ -88,20 +85,19 @@ def play_game(
     zombie_positions: list[int] = place_zombies(G, k, rng)
     survivor_pos: int = place_survivor(G, zombie_positions)
 
-    # Compute strategic target assignments (once per game, fixed throughout)
-    assignments: list[int | None] | None = None
-    if zombie_lazy and zombie_strategic:
-        targets = assign_targets(G, k)
-        assignments = targets
-        log.debug(
-            "--- game start [strategic]: zombies=%s  targets=%s  survivor=%d ---",
-            zombie_positions, assignments, survivor_pos,
-        )
-    else:
-        log.debug(
-            "--- game start: zombies=%s  survivor=%d  z_lazy=%s  s_lazy=%s ---",
-            zombie_positions, survivor_pos, zombie_lazy, survivor_lazy,
-        )
+    # Build per-zombie strategic target assignments (once per game, fixed).
+    # Only "lazy_strategic" zombies receive a non-None target vertex.
+    assignments: list[int | None] = [None] * k
+    strategic_idx = [i for i, m in enumerate(zombie_modes) if m == "lazy_strategic"]
+    if strategic_idx:
+        targets = assign_targets(G, len(strategic_idx))
+        for i, tgt in zip(strategic_idx, targets):
+            assignments[i] = tgt
+
+    log.debug(
+        "--- game start: zombies=%s  survivor=%d  modes=%s  assignments=%s ---",
+        zombie_positions, survivor_pos, zombie_modes, assignments,
+    )
 
     # Immediate capture at placement (very dense zombie placement on tiny graphs)
     if survivor_pos in zombie_positions:
@@ -122,7 +118,7 @@ def play_game(
         # Step 1: Zombies move
         # ------------------------------------------------------------------
         zombie_positions = move_zombies(
-            G, zombie_positions, survivor_pos, zombie_lazy, assignments
+            G, zombie_positions, survivor_pos, zombie_modes, assignments
         )
         log.debug("round %d after zombie move: zombies=%s", round_num, zombie_positions)
 
