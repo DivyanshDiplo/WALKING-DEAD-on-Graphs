@@ -71,6 +71,8 @@ def run(
     zombie_lazy: bool,
     survivor_lazy: bool,
     trials: int,
+    chord_keep_prob: float = 1.0,
+    zombie_strategic: bool = False,
     seed: int | None = None,
     graph_seed: int | None = None,
 ) -> SimulationResult:
@@ -79,31 +81,38 @@ def run(
 
     Parameters
     ----------
-    n            : number of nodes in the outerplanar graph.
-    k            : number of zombies.
-    zombie_lazy  : True = lazy zombies; False = active zombies.
-    survivor_lazy: True = lazy survivor; False = active survivor.
-    trials       : number of Monte Carlo trials.
-    seed         : RNG seed for placement randomness (None = non-deterministic).
-    graph_seed   : separate seed for graph construction (None = non-deterministic).
+    n               : number of nodes in the outerplanar graph.
+    k               : number of zombies.
+    zombie_lazy     : True = lazy zombies; False = active zombies.
+    survivor_lazy   : True = lazy survivor; False = active survivor.
+    trials          : number of Monte Carlo trials.
+    chord_keep_prob : fraction of interior chord edges to keep (0 < p <= 1).
+    zombie_strategic: True = paper's assignment-based lazy strategy (requires
+                      zombie_lazy=True); False = greedy lazy.
+    seed            : RNG seed for placement randomness (None = non-deterministic).
+    graph_seed      : separate seed for graph construction (None = non-deterministic).
 
     Returns
     -------
     SimulationResult
     """
-    G: nx.Graph = build_outerplanar(n, seed=graph_seed)
+    G: nx.Graph = build_outerplanar(n, chord_keep_prob=chord_keep_prob, seed=graph_seed)
     rng = random.Random(seed)
 
     log.debug(
-        "simulation start: n=%d  k=%d  zombie_lazy=%s  survivor_lazy=%s  trials=%d",
-        n, k, zombie_lazy, survivor_lazy, trials,
+        "simulation start: n=%d  k=%d  zombie_lazy=%s  zombie_strategic=%s  "
+        "survivor_lazy=%s  trials=%d  chord_keep_prob=%.2f",
+        n, k, zombie_lazy, zombie_strategic, survivor_lazy, trials, chord_keep_prob,
     )
 
     capture_rounds: list[int] = []
     survivor_wins = 0
 
     for trial_idx in range(trials):
-        result: GameResult = play_game(G, k, zombie_lazy, survivor_lazy, rng)
+        result: GameResult = play_game(
+            G, k, zombie_lazy, survivor_lazy, rng,
+            zombie_strategic=zombie_strategic,
+        )
         if result.outcome == "capture":
             capture_rounds.append(result.rounds)
         else:

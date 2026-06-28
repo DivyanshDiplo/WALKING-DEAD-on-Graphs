@@ -7,13 +7,18 @@ This is essential for cycle-detection termination to be mathematically exact.
 
 Definitions
 -----------
-active zombie  : must take one step along a shortest path toward the survivor.
-lazy zombie    : may stay still OR take one step; stays still if it is already
-                 on the unique best position (i.e. no neighbour on a shortest
-                 path to the survivor is strictly closer than it currently is).
-active survivor: must move to an adjacent vertex every turn.
-lazy survivor  : may stay still OR move; chooses whichever maximises its
-                 minimum distance to the nearest zombie.
+active zombie          : must take one step along a shortest path toward the survivor.
+lazy zombie (greedy)   : may stay still OR take one step; stays still when no neighbour
+                         is strictly closer to the survivor.
+lazy zombie (strategic): paper's assignment-based strategy.  Each zombie is assigned a
+                         target vertex v.  It moves to neighbour w only when w is
+                         simultaneously closer to BOTH its assigned target v AND the
+                         survivor.  If no such neighbour exists it stays still.  Once
+                         a zombie reaches its assigned vertex it falls back to greedy
+                         lazy behaviour.
+active survivor        : must move to an adjacent vertex every turn.
+lazy survivor          : may stay still OR move; chooses whichever maximises its
+                         minimum distance to the nearest zombie.
 """
 
 import logging
@@ -45,6 +50,49 @@ def _min_dist_to_zombies(
 ) -> int:
     """Minimum BFS distance from `node` to the nearest zombie."""
     return min(dist_cache[z][node] for z in zombie_positions)
+
+
+# ---------------------------------------------------------------------------
+# Placement
+# ---------------------------------------------------------------------------
+
+def assign_targets(G: nx.Graph, k: int) -> list[int]:
+    """
+    Pick k spread-out strategic target vertices for the assignment-based lazy
+    zombie strategy using a greedy k-center algorithm.
+
+    Step 1: seed with the highest-degree node (most structurally important).
+    Step 2: repeatedly add the node that maximises the minimum BFS distance to
+            all already-chosen nodes.
+
+    This approximates the ear-decomposition endpoint assignment described in the
+    paper while remaining graph-agnostic.
+
+    Returns a list of k node indices (one target per zombie).
+    """
+    nodes = sorted(G.nodes())
+    n = len(nodes)
+    if k >= n:
+        return nodes[:k]
+
+    # Pre-compute BFS distances from every node once — O(n(n+m))
+    dist: dict[int, dict[int, int]] = {
+        v: dict(nx.single_source_shortest_path_length(G, v)) for v in nodes
+    }
+
+    # Seed: highest-degree node
+    first = max(nodes, key=lambda v: G.degree(v))
+    chosen: list[int] = [first]
+
+    while len(chosen) < k:
+        best = max(
+            (v for v in nodes if v not in chosen),
+            key=lambda v: min(dist[v][c] for c in chosen),
+        )
+        chosen.append(best)
+
+    log.debug("assign_targets: k=%d  targets=%s", k, chosen)
+    return chosen
 
 
 # ---------------------------------------------------------------------------
@@ -141,64 +189,114 @@ def zombie_step(
     pos: int,
     survivor_pos: int,
     lazy: bool,
+    assigned_vertex: int | None = None,
 ) -> int:
     """
     Compute the next position for a single zombie.
 
-    Active zombie
-    -------------
-    Must move.  Picks the neighbour that lies on a shortest path to the
-    survivor (i.e. is strictly closer than the current position).  Tie-breaks
-    by lowest node index.  If all neighbours are equidistant or farther (only
-    possible on disconnected graphs, which we never generate), stays put as a
-    safe fallback.
+    Active zombie  (lazy=False)
+    ---------------------------
+    Must move.  Picks the neighbour strictly closer to the survivor (lowest
+    index tie-break).  Falls back to any neighbour if none are closer (edge
+    case on disconnected graphs, which we never generate).
 
-    Lazy zombie
-    -----------
-    Moves only if doing so strictly reduces distance to the survivor.
-    If the zombie is already at distance 0 (on the survivor — capture already
-    handled upstream) or if no neighbour is strictly closer, it stays still.
+    Lazy greedy  (lazy=True, assigned_vertex=None)
+    -----------------------------------------------
+    Our default lazy mode.  Moves to the closest-to-survivor neighbour when
+    one exists; otherwise stays still.
+
+    Lazy strategic  (lazy=True, assigned_vertex=v)
+    -----------------------------------------------
+    Paper's assignment-based strategy.  Moves to neighbour w only when w is
+    strictly closer to BOTH the assigned target vertex v AND the survivor.
+    If no such dual-closer neighbour exists the zombie stays still.
+
+    Special case: when the zombie is already at its assigned vertex (or the
+    target equals the survivor's position), the dual condition can never be
+    satisfied so the zombie falls back to greedy lazy behaviour — it guards
+    its target while still capturing if the survivor comes adjacent.
     """
     if pos == survivor_pos:
         return pos  # already captured; caller handles this
 
-    current_dist = nx.shortest_path_length(G, pos, survivor_pos)
+    current_dist_survivor = nx.shortest_path_length(G, pos, survivor_pos)
 
-    # Neighbours that are strictly one step closer on a shortest path
-    closer = sorted(
-        [
-            n for n in G.neighbors(pos)
-            if nx.shortest_path_length(G, n, survivor_pos) == current_dist - 1
-        ]
+    # Neighbours strictly closer to the survivor
+    closer_survivor = sorted(
+        n for n in G.neighbors(pos)
+        if nx.shortest_path_length(G, n, survivor_pos) == current_dist_survivor - 1
     )
 
-    if lazy:
-        # Lazy: only move if there is a strictly closer neighbour
-        if closer:
-            log.debug(
-                "zombie_step [lazy]: %d -> %d  (dist %d -> %d)",
-                pos, closer[0], current_dist, current_dist - 1,
-            )
-            return closer[0]   # deterministic: lowest index
-        log.debug("zombie_step [lazy]: %d stays (no strictly closer neighbour)", pos)
-        return pos             # stay still
-    else:
-        # Active: must move; pick closest neighbour; fall back to any neighbour
-        if closer:
+    if not lazy:
+        # Active: must move toward survivor
+        if closer_survivor:
             log.debug(
                 "zombie_step [active]: %d -> %d  (dist %d -> %d)",
-                pos, closer[0], current_dist, current_dist - 1,
+                pos, closer_survivor[0], current_dist_survivor, current_dist_survivor - 1,
             )
-            return closer[0]
-        # Edge case: no neighbour is closer (should not happen on connected graphs
-        # when current_dist > 0).  Move to the neighbour with the smallest dist.
-        neighbours = sorted(G.neighbors(pos))
-        neighbours.sort(key=lambda n: nx.shortest_path_length(G, n, survivor_pos))
+            return closer_survivor[0]
+        # Fallback: move to closest neighbour (should not occur on connected graphs)
+        neighbours = sorted(
+            G.neighbors(pos),
+            key=lambda n: nx.shortest_path_length(G, n, survivor_pos),
+        )
         log.debug(
             "zombie_step [active, fallback]: %d -> %d  (no closer neighbour found)",
             pos, neighbours[0],
         )
         return neighbours[0]
+
+    # --- Lazy from here ---
+
+    if assigned_vertex is None:
+        # Greedy lazy: move if closer to survivor
+        if closer_survivor:
+            log.debug(
+                "zombie_step [lazy, greedy]: %d -> %d  (dist %d -> %d)",
+                pos, closer_survivor[0], current_dist_survivor, current_dist_survivor - 1,
+            )
+            return closer_survivor[0]
+        log.debug("zombie_step [lazy, greedy]: %d stays (no closer neighbour)", pos)
+        return pos
+
+    # Strategic lazy: dual condition
+    # Fallback when already at assigned vertex or target == survivor
+    if pos == assigned_vertex or assigned_vertex == survivor_pos:
+        if closer_survivor:
+            log.debug(
+                "zombie_step [lazy, strategic, at_target]: %d -> %d  (greedy fallback)",
+                pos, closer_survivor[0],
+            )
+            return closer_survivor[0]
+        log.debug(
+            "zombie_step [lazy, strategic, at_target]: %d stays  (target=%d)",
+            pos, assigned_vertex,
+        )
+        return pos
+
+    current_dist_target = nx.shortest_path_length(G, pos, assigned_vertex)
+
+    # Neighbours closer to BOTH target AND survivor simultaneously
+    dual_closer = sorted(
+        n for n in G.neighbors(pos)
+        if (nx.shortest_path_length(G, n, survivor_pos) == current_dist_survivor - 1
+            and nx.shortest_path_length(G, n, assigned_vertex) == current_dist_target - 1)
+    )
+
+    if dual_closer:
+        log.debug(
+            "zombie_step [lazy, strategic]: %d -> %d  "
+            "(closer to both target=%d and survivor=%d)",
+            pos, dual_closer[0], assigned_vertex, survivor_pos,
+        )
+        return dual_closer[0]
+
+    log.debug(
+        "zombie_step [lazy, strategic]: %d stays  "
+        "(no dual-closer neighbour, target=%d, dist_target=%d, dist_survivor=%d)",
+        pos, assigned_vertex, current_dist_target, current_dist_survivor,
+    )
+    return pos
 
 
 def move_zombies(
@@ -206,9 +304,19 @@ def move_zombies(
     zombie_positions: list[int],
     survivor_pos: int,
     lazy: bool,
+    assignments: list[int | None] | None = None,
 ) -> list[int]:
-    """Return new positions for all zombies after one turn."""
-    return [zombie_step(G, z, survivor_pos, lazy) for z in zombie_positions]
+    """Return new positions for all zombies after one turn.
+
+    assignments: per-zombie target vertex list (None entry = no assignment).
+                 Defaults to all-None when omitted (greedy or active mode).
+    """
+    if assignments is None:
+        assignments = [None] * len(zombie_positions)
+    return [
+        zombie_step(G, z, survivor_pos, lazy, assignments[i])
+        for i, z in enumerate(zombie_positions)
+    ]
 
 
 # ---------------------------------------------------------------------------

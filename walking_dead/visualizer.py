@@ -170,6 +170,7 @@ def save_report(
     config_str = (
         f"Graph size n={run_config['n']}   |   "
         f"Zombies k={run_config['k']}   |   "
+        f"Chord keep p={run_config.get('chord_keep_prob', 1.0):.2f}   |   "
         f"Trials={run_config['trials']}   |   "
         f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}  {ts[9:11]}:{ts[11:13]}:{ts[13:15]}"
     )
@@ -390,6 +391,7 @@ def save_graph(
         f"Outerplanar Game Graph\n"
         f"n={run_config['n']} nodes   |   "
         f"k={run_config['k']} zombie(s)   |   "
+        f"chord_keep_prob={run_config.get('chord_keep_prob', 1.0):.2f}   |   "
         f"{run_config['trials']} trial(s)   |   "
         f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}",
         fontsize=12, fontweight="bold", color=_TEXT, pad=14,

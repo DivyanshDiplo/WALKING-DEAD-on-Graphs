@@ -55,6 +55,21 @@ def _prompt_bool(prompt: str) -> bool:
         print("  Please enter y or n.")
 
 
+def _prompt_float(prompt: str, lo: float, hi: float) -> float:
+    """Prompt until the user enters a float in [lo, hi]."""
+    while True:
+        raw = input(prompt).strip()
+        try:
+            val = float(raw)
+        except ValueError:
+            print("  Please enter a decimal number.")
+            continue
+        if val < lo or val > hi:
+            print(f"  Value must be between {lo} and {hi}.")
+            continue
+        return val
+
+
 # ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
@@ -99,13 +114,22 @@ def main() -> None:
     print("  Graph settings")
     print(_THIN)
     n = _prompt_int("  Graph size  n (number of nodes, >= 3): ", lo=3)
-    k = _prompt_int(f"  Zombies     k (1 – {n - 1}): ", lo=1, hi=n - 1)
+    k = _prompt_int(f"  Zombies     k (1 - {n - 1}): ", lo=1, hi=n - 1)
+    chord_keep_prob = _prompt_float(
+        "  Chord keep probability (0.0 < p <= 1.0, 1.0 = fully triangulated): ",
+        lo=0.01, hi=1.0,
+    )
 
     # --- Mode parameters ---
     print()
     print("  Variation settings")
     print(_THIN)
-    zombie_lazy   = _prompt_bool("  Lazy zombies?   (y = lazy, n = active)")
+    zombie_lazy = _prompt_bool("  Lazy zombies?   (y = lazy, n = active)")
+    zombie_strategic = False
+    if zombie_lazy:
+        zombie_strategic = _prompt_bool(
+            "  Strategic lazy? (y = paper's assignment strategy, n = greedy)"
+        )
     survivor_lazy = _prompt_bool("  Lazy survivor?  (y = lazy, n = active)")
 
     # --- Simulation parameters ---
@@ -115,14 +139,17 @@ def main() -> None:
     trials = _prompt_int("  Number of Monte Carlo trials (>= 1): ", lo=1)
 
     # --- Run ---
-    zombie_label   = "lazy"   if zombie_lazy   else "active"
+    if zombie_lazy:
+        zombie_label = "lazy_strategic" if zombie_strategic else "lazy_greedy"
+    else:
+        zombie_label = "active"
     survivor_label = "lazy"   if survivor_lazy else "active"
     label = f"Zombies={zombie_label}, Survivor={survivor_label}"
 
     print()
     print(_THIN)
-    print(f"  Running {trials} trial(s) on an outerplanar graph with {n} nodes "
-          f"and {k} zombie(s)...")
+    print(f"  Running {trials} trial(s) on an outerplanar graph with {n} nodes, "
+          f"{k} zombie(s), chord_keep_prob={chord_keep_prob:.2f}...")
     print(_THIN)
 
     result = run(
@@ -131,6 +158,8 @@ def main() -> None:
         zombie_lazy=zombie_lazy,
         survivor_lazy=survivor_lazy,
         trials=trials,
+        chord_keep_prob=chord_keep_prob,
+        zombie_strategic=zombie_strategic,
     )
 
     _header("Results")
@@ -143,10 +172,18 @@ def main() -> None:
     print()
     while _prompt_bool("\n  Run another variation with the same graph/trial settings?"):
         print()
-        zombie_lazy   = _prompt_bool("  Lazy zombies?   (y = lazy, n = active)")
+        zombie_lazy = _prompt_bool("  Lazy zombies?   (y = lazy, n = active)")
+        zombie_strategic = False
+        if zombie_lazy:
+            zombie_strategic = _prompt_bool(
+                "  Strategic lazy? (y = paper's assignment strategy, n = greedy)"
+            )
         survivor_lazy = _prompt_bool("  Lazy survivor?  (y = lazy, n = active)")
-        zombie_label   = "lazy"   if zombie_lazy   else "active"
-        survivor_label = "lazy"   if survivor_lazy else "active"
+        if zombie_lazy:
+            zombie_label = "lazy_strategic" if zombie_strategic else "lazy_greedy"
+        else:
+            zombie_label = "active"
+        survivor_label = "lazy" if survivor_lazy else "active"
         label = f"Zombies={zombie_label}, Survivor={survivor_label}"
 
         print(_THIN)
@@ -157,6 +194,8 @@ def main() -> None:
             zombie_lazy=zombie_lazy,
             survivor_lazy=survivor_lazy,
             trials=trials,
+            chord_keep_prob=chord_keep_prob,
+            zombie_strategic=zombie_strategic,
         )
         _print_result(label, result)
         session_results.append((label, result))
@@ -166,15 +205,16 @@ def main() -> None:
     print(_THIN)
     print("  Generating report...")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_config = {"n": n, "k": k, "trials": trials, "chord_keep_prob": chord_keep_prob}
     report_path = save_report(
-        run_config={"n": n, "k": k, "trials": trials},
+        run_config=run_config,
         results=session_results,
         timestamp=ts,
     )
     first_graph = session_results[0][1].graph
     graph_path = save_graph(
         G=first_graph,
-        run_config={"n": n, "k": k, "trials": trials},
+        run_config=run_config,
         timestamp=ts,
     )
     print(f"  Report saved -> {report_path}")

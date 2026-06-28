@@ -30,6 +30,7 @@ import networkx as nx
 
 from .strategies import (
     _dist_from,
+    assign_targets,
     move_zombies,
     place_survivor,
     place_zombies,
@@ -61,17 +62,21 @@ def play_game(
     zombie_lazy: bool,
     survivor_lazy: bool,
     rng: random.Random,
+    zombie_strategic: bool = False,
 ) -> GameResult:
     """
     Run a single game on graph G.
 
     Parameters
     ----------
-    G            : the outerplanar graph (must be connected).
-    k            : number of zombies.
-    zombie_lazy  : True = lazy zombies (may wait); False = active (must move).
-    survivor_lazy: True = lazy survivor (may stay); False = active (must move).
-    rng          : seeded RNG used only for zombie initial placement.
+    G                : the outerplanar graph (must be connected).
+    k                : number of zombies.
+    zombie_lazy      : True = lazy zombies (may wait); False = active (must move).
+    survivor_lazy    : True = lazy survivor (may stay); False = active (must move).
+    rng              : seeded RNG used only for zombie initial placement.
+    zombie_strategic : True = paper's assignment-based lazy strategy (only meaningful
+                       when zombie_lazy=True).  Each zombie is assigned a spread-out
+                       target vertex and uses the dual closest-to-both condition.
 
     Returns
     -------
@@ -83,10 +88,20 @@ def play_game(
     zombie_positions: list[int] = place_zombies(G, k, rng)
     survivor_pos: int = place_survivor(G, zombie_positions)
 
-    log.debug(
-        "--- game start: zombies=%s  survivor=%d  z_lazy=%s  s_lazy=%s ---",
-        zombie_positions, survivor_pos, zombie_lazy, survivor_lazy,
-    )
+    # Compute strategic target assignments (once per game, fixed throughout)
+    assignments: list[int | None] | None = None
+    if zombie_lazy and zombie_strategic:
+        targets = assign_targets(G, k)
+        assignments = targets
+        log.debug(
+            "--- game start [strategic]: zombies=%s  targets=%s  survivor=%d ---",
+            zombie_positions, assignments, survivor_pos,
+        )
+    else:
+        log.debug(
+            "--- game start: zombies=%s  survivor=%d  z_lazy=%s  s_lazy=%s ---",
+            zombie_positions, survivor_pos, zombie_lazy, survivor_lazy,
+        )
 
     # Immediate capture at placement (very dense zombie placement on tiny graphs)
     if survivor_pos in zombie_positions:
@@ -106,7 +121,9 @@ def play_game(
         # ------------------------------------------------------------------
         # Step 1: Zombies move
         # ------------------------------------------------------------------
-        zombie_positions = move_zombies(G, zombie_positions, survivor_pos, zombie_lazy)
+        zombie_positions = move_zombies(
+            G, zombie_positions, survivor_pos, zombie_lazy, assignments
+        )
         log.debug("round %d after zombie move: zombies=%s", round_num, zombie_positions)
 
         # ------------------------------------------------------------------
